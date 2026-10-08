@@ -1,0 +1,4 @@
+[submodule "meetily"]
+	path = meetily
+	url = https://github.com/Dreamkeeper/meetily.git
+	branch = dreamkeeper-build

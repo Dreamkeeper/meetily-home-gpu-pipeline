@@ -1,0 +1,22 @@
+# Secrets: see client/secrets/README.md
+client/secrets/*
+!client/secrets/README.md
+server/service_token.txt
+
+# Runtime state, logs and caches (voices.json holds voice embeddings: biometric data)
+client/state/
+server/jobs/
+server/work/
+server/.venv/
+server/*.log
+__pycache__/
+*.pyc
+
+# Meetily build outputs
+meetily-build/*.log
+meetily-build/libclang18/
+meetily-build/*.diff
+
+# Local configuration (copy from the *.example.json files)
+client/config.json
+client/reminder_rules.json

@@ -1,0 +1,29 @@
+{
+  "recordings_dir": "C:\\Users\\YOU\\Music\\meetily-recordings",
+  "output_dir": "C:\\Users\\YOU\\Documents\\Meeting transcripts",
+  "process_after": "2026-01-01T00:00:00+00:00",
+  "min_duration_s": 120,
+  "poll_s": 60,
+  "ssh_host": "gpu-box",
+  "local_port": 18765,
+  "opus_bitrate": "32k",
+  "opus_bitrate_stereo": "48k",
+  "notes_cmd": [
+    "C:\\Users\\YOU\\.local\\bin\\claude.exe",
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Read,Write,Edit,Glob,Grep"
+  ],
+  "claude_accounts": [
+    {
+      "name": "primary",
+      "config_dir": null
+    },
+    {
+      "name": "fallback",
+      "config_dir": "C:\\Users\\YOU\\.claude-fallback"
+    }
+  ],
+  "owner_name": "Your Name"
+}
