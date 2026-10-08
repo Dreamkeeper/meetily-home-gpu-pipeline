@@ -1,15 +1,20 @@
 # GPU box: start the meeting service at logon and restart it within 10 min if it dies.
 # Normal (non-admin) PowerShell, as the user who runs the service. Idempotent.
 $ErrorActionPreference = 'Stop'
-$start = Join-Path $PSScriptRoot 'start_service.ps1'
-$action = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$start`""
+$vbs = Join-Path $PSScriptRoot 'start_service-hidden.vbs'   # no console flash (powershell -WindowStyle Hidden still flashes)
+$action = "wscript.exe //B //Nologo `"$vbs`""
 
 # Watchdog: every 10 minutes, start the service unless it is already listening on 127.0.0.1:8765
 schtasks /create /tn MeetingService-Watchdog /sc minute /mo 10 /tr $action /it /f | Out-Null
 
-# Startup folder entry: start right after logon instead of waiting for the first watchdog run
-$startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'meeting-service.cmd'
-Set-Content -Path $startup -Value "@start `"`" /min $action" -Encoding ascii
+# Startup folder shortcut: start right after logon instead of waiting for the first watchdog run
+$startupDir = [Environment]::GetFolderPath('Startup')
+Remove-Item (Join-Path $startupDir 'meeting-service.cmd') -ErrorAction SilentlyContinue   # older installs
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startupDir 'meeting-service.lnk'))
+$lnk.TargetPath = 'wscript.exe'
+$lnk.Arguments = "//B //Nologo `"$vbs`""
+$lnk.WorkingDirectory = $PSScriptRoot
+$lnk.Save()
 
 schtasks /run /tn MeetingService-Watchdog | Out-Null
-Write-Host "Installed: task MeetingService-Watchdog and $startup; service starting."
+Write-Host "Installed: task MeetingService-Watchdog and $startupDir\meeting-service.lnk; service starting."
