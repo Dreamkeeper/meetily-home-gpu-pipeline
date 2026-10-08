@@ -88,6 +88,7 @@ The fork ([Dreamkeeper/meetily](https://github.com/Dreamkeeper/meetily), branch 
 - **whisper-rs-sys + LLVM 23:** bindgen 0.69 produces an empty `whisper_full_params`. `build_fork.ps1` uses libclang 18 from the PyPI `libclang` wheel.
 - **winget downloads can stall** on Delivery Optimization. Set winget's downloader to `wininet`.
 - **Over SSH to a Windows GPU box,** the shell is cmd and isn't elevated. Call `uv.exe` by its full path, because the WinGet link fails there.
+- **`git pull` over SSH hangs inside an SSH session** when git uses Windows' OpenSSH `ssh.exe`. Clone with Git's bundled ssh: `git clone -c core.sshCommand="'C:/Program Files/Git/usr/bin/ssh.exe' -o BatchMode=yes" …`.
 - **torchcodec doesn't work on Windows,** so audio goes to pyannote as in-memory waveforms.
 - **whisper large-v3-turbo can't translate:** it produces gibberish. Live translation uses full large-v3.
 - **The GPU box frees Whisper after 10 idle minutes.** A cold load takes up to about a minute; Meetily queues live segments meanwhile, and reminders pre-warm the model.
