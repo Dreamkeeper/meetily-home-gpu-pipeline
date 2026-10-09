@@ -1,8 +1,11 @@
 {
-  "minutes_before": 1,
+  "call_apps": [
+    "Zoom.exe"
+  ],
+  "call_apps_note": "Exe names whose microphone use counts as a call start (e.g. add Telegram.exe, Weixin.exe).",
   "skip_name_contains": [
     "Lunch",
     "Focus time"
   ],
-  "skip_name_contains_note": "Case-insensitive substrings of the calendar event name; every other accepted meeting gets a reminder."
+  "skip_name_contains_note": "Case-insensitive substrings of the calendar event running when the call starts; matching calls get no reminder."
 }

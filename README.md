@@ -19,7 +19,7 @@ Built for mostly-Russian meetings with English and Chinese parts (e.g. calls wit
 - **Automation:**
   - A watcher on the laptop picks up finished recordings and renames each meeting folder after its topic.
   - It sends Telegram notifications when a meeting is ready and when one fails, and handles Claude usage limits (waits for the reset or switches to a second account).
-  - Recording reminders from the calendar have a one-click "Записать" (start recording) button.
+  - When a call starts (Zoom, or any app listed in `call_apps`, starts using the microphone) and Meetily isn't recording, a Windows toast offers a one-click "Записать" (start recording). The calendar event running at that moment, if any, names the recording; ad-hoc calls get the reminder too.
 
 ```
 LAPTOP                                              GPU BOX (e.g. desktop with an NVIDIA card)
@@ -28,7 +28,7 @@ Meetily fork ── live segments ── SSH tunnel ──────► server
   audio.mp4 + audio_stereo.mp4                         127.0.0.1:8765 (localhost only)
 client/watcher.py ── finished recording ──────────► jobs: diarization + language routing + ASR
   render → Claude notes → folder rename → roll-up
-  → Telegram; calendar reminders; tunnel keeper
+  → Telegram; call-start reminders; tunnel keeper
 ```
 
 ## Requirements
@@ -54,12 +54,12 @@ client/watcher.py ── finished recording ──────────► jo
 6. Updates: `git pull`, or `server\update.ps1`, which pulls, re-syncs packages and restarts only when no job is running. A read-only GitHub deploy key works well for pulling a private fork.
 
 ### Laptop (normal, non-admin PowerShell)
-1. Install the Python packages: `pip install requests numpy winotify`.
+1. Install the Python packages from a normal terminal: `pip install requests numpy winotify`. (Not from the Claude desktop app's terminal: it redirects `AppData`, so the scheduled watcher wouldn't see packages installed with `--user`.)
 2. Add an SSH host alias for the GPU box, e.g. `gpu-box`, using key authentication.
 3. Install the Claude Code CLI and log in.
    - Optional second account for usage-limit fallback: `$env:CLAUDE_CONFIG_DIR="$env:USERPROFILE\.claude-fallback"; claude`, then `/login`.
 4. Copy `client\config.example.json` to `client\config.json` and edit it: paths, `ssh_host`, `owner_name`, Claude accounts.
-5. Copy `client\reminder_rules.example.json` to `client\reminder_rules.json`. Optional: list meeting series that shouldn't trigger reminders.
+5. Copy `client\reminder_rules.example.json` to `client\reminder_rules.json`. Optional: add call apps (`Telegram.exe`, `Weixin.exe`, …) and meeting series that shouldn't trigger reminders.
 6. Secrets: see `client\secrets\README.md` for the service token, and optionally the Bitrix24 webhook and the Telegram bot.
 7. Run `client\install_autostart.ps1`. It installs the watcher task and the `meetily-record:` link handler used by reminders. Log: `client\state\watcher.log`.
 
@@ -92,7 +92,8 @@ The fork ([Dreamkeeper/meetily](https://github.com/Dreamkeeper/meetily), branch 
 - **`git pull` over SSH hangs inside an SSH session** when git uses Windows' OpenSSH `ssh.exe`. Clone with Git's bundled ssh: `git clone -c core.sshCommand="'C:/Program Files/Git/usr/bin/ssh.exe' -o BatchMode=yes" …`.
 - **torchcodec doesn't work on Windows,** so audio goes to pyannote as in-memory waveforms.
 - **whisper large-v3-turbo can't translate:** it produces gibberish. Live translation uses full large-v3.
-- **The GPU box frees Whisper after 10 idle minutes.** A cold load takes up to about a minute; Meetily queues live segments meanwhile, and reminders pre-warm the model.
+- **The GPU box frees Whisper after 10 idle minutes.** A cold load takes up to about a minute; Meetily queues live segments meanwhile, and the call reminder pre-warms the model.
+- **Call detection** reads Windows' microphone privacy records (`CapabilityAccessManager\ConsentStore\microphone`): an app holds the mic while its `LastUsedTimeStop` is 0. A call joined without computer audio isn't detected.
 - **Stereo owner detection** needs a voice match, because people sitting next to you are heard through your mic too.
 - **Upstream Meetily's `duration_seconds`** is the end of the last live-transcript segment, not the real length. The fork fixes it, and the watcher measures the file anyway.
 

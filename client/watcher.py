@@ -464,17 +464,26 @@ def process(folder, meta, state, out=None):
         save_state(state)
 
 
-def reminder_step():
-    """Recording reminder for meetings starting now (Bitrix24 calendar); never blocks processing."""
-    path = HERE / "state" / "reminders.json"
-    try:
-        rstate = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        name = reminders.check(rstate)
-        path.write_text(json.dumps(rstate, ensure_ascii=False, indent=1), encoding="utf-8")
-        if name:
-            log.info("recording reminder shown: %s", name)
-    except Exception:
-        log.exception("recording reminder check failed")
+def call_watcher():
+    """Recording reminder when a call app (Zoom by default) starts using the microphone, including
+    ad-hoc calls announced in Telegram that aren't in the calendar. One reminder per call; a call
+    ends after the mic has been free for a minute (short gaps while switching devices don't count)."""
+    since, last_seen = None, 0.0
+    while True:
+        try:
+            app, now = reminders.active_call(), time.time()
+            if app:
+                if since is None:
+                    since = now
+                    shown = reminders.on_call_start(app)
+                    log.info("call started (%s)%s", app, f"; recording reminder shown: {shown}" if shown else "")
+                last_seen = now
+            elif since is not None and now - last_seen > 60:
+                log.info("call ended after %d min", (last_seen - since) // 60)
+                since = None
+        except Exception:
+            log.exception("call watcher failed")
+        time.sleep(3)
 
 
 def single_instance():
@@ -508,8 +517,8 @@ def main():
         process(folder, json.loads((folder / "metadata.json").read_text(encoding="utf-8")), state, args.out)
         return
     threading.Thread(target=tunnel_keeper, name="tunnel-keeper", daemon=True).start()
+    threading.Thread(target=call_watcher, name="call-watcher", daemon=True).start()
     while True:
-        reminder_step()
         for folder, meta in list(candidates(state)):
             process(folder, meta, state)
         for name, st in list(notes_retries(state)):

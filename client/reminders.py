@@ -1,12 +1,15 @@
-"""Recording reminders from the Bitrix24 calendar, with a one-click "Записать" button.
+"""Recording reminders when a call starts, with a one-click "Записать" button.
 
   python reminders.py register          # register the meetily-record: link handler (current user, no admin)
   python reminders.py test ["Название"] # show a reminder now
-  python reminders.py upcoming          # list today's meetings and whether each would get a reminder
+  python reminders.py call              # is a call app using the mic right now, and which calendar event is on
+  python reminders.py upcoming          # list today's Bitrix24 meetings and whether each would get a reminder
   python reminders.py start "<meetily-record:...>"   # used by the link handler
 
-The watcher calls check(state) every poll. A reminder is shown about a minute before an accepted
-Bitrix24 meeting starts, unless its name matches reminder_rules.json or Meetily is already recording.
+The watcher polls active_call() every few seconds. When a call app from reminder_rules.json
+(`call_apps`, default Zoom) starts using the microphone and Meetily isn't recording, on_call_start()
+shows a reminder. This also covers ad-hoc calls that aren't in the calendar. A Bitrix24 meeting running
+at that moment names the recording; its name is checked against `skip_name_contains`.
 """
 import datetime as dt
 import json
@@ -16,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import winreg
 
 import requests
 
@@ -29,6 +33,11 @@ MEETILY = pathlib.Path.home() / "AppData" / "Local" / "meetily" / "meetily.exe"
 PROTOCOL = "meetily-record"
 CACHE_S = 600
 _cache = {"at": 0.0, "events": []}
+CALL_APPS = [a.lower() for a in RULES.get("call_apps", ["Zoom.exe"])]
+APP_LABELS = {"zoom.exe": "Zoom", "telegram.exe": "Telegram", "weixin.exe": "WeChat", "ms-teams.exe": "Teams"}
+# Windows' privacy bookkeeping: per desktop app, LastUsedTimeStop == 0 while it holds the microphone
+MIC_KEY = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged"
+EVENT_SLACK = dt.timedelta(minutes=15)   # calls often start a bit before the calendar slot
 
 
 def todays_meetings():
@@ -71,45 +80,82 @@ def meetily_recording():
     return False
 
 
-def show(name, start):
+def apps_using_mic():
+    """Lower-case exe names of desktop apps that hold the microphone right now."""
+    apps = set()
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, MIC_KEY) as root:
+        for i in range(winreg.QueryInfoKey(root)[0]):
+            sub = winreg.EnumKey(root, i)   # e.g. "C:#Program Files#Zoom#bin#Zoom.exe"
+            try:
+                with winreg.OpenKey(root, sub) as k:
+                    start = winreg.QueryValueEx(k, "LastUsedTimeStart")[0]
+                    stop = winreg.QueryValueEx(k, "LastUsedTimeStop")[0]
+            except OSError:
+                continue
+            if start and stop == 0:
+                apps.add(sub.rsplit("#", 1)[-1].lower())
+    return apps
+
+
+def _running(exe):
+    out = subprocess.run(["tasklist", "/fi", f"imagename eq {exe}", "/nh"], capture_output=True, text=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    return exe.lower() in out.lower()
+
+
+def active_call():
+    """Call app (exe name) currently using the microphone, or None. The process check guards against
+    a stale registry entry left by an app that crashed mid-call."""
+    using = apps_using_mic()
+    for app in CALL_APPS:
+        if app in using and _running(app):
+            return app
+    return None
+
+
+def current_event():
+    """Name of the accepted Bitrix24 meeting running now (or starting within EVENT_SLACK), else None."""
+    now = dt.datetime.now().astimezone()
+    for _, name, start, end in todays_meetings():
+        if start - EVENT_SLACK <= now <= end:
+            return name
+    return None
+
+
+def on_call_start(app):
+    """Reminder for a call that just started; returns what was shown, or None."""
+    if meetily_recording():
+        return None
+    try:
+        name = current_event()
+    except Exception:   # calendar unavailable: still remind, just without a name
+        name = None
+    if name and skipped(name):
+        return None
+    prewarm()
+    show(name, APP_LABELS.get(app, app))
+    return name or APP_LABELS.get(app, app)
+
+
+def show(name, app="Zoom"):
     from winotify import Notification
-    link = f"{PROTOCOL}:{urllib.parse.quote(name)}"
-    toast = Notification(app_id="Meetily", title=f"Встреча начинается в {start:%H:%M}",
-                         msg=f"«{name}» — записать в Meetily?", duration="long")
+    link = f"{PROTOCOL}:{urllib.parse.quote(name or '')}"
+    toast = Notification(app_id="Meetily", title=f"Звонок в {app} начался",
+                         msg=f"«{name}» — записать в Meetily?" if name else "Записать в Meetily?",
+                         duration="long")
     toast.add_actions(label="Записать", launch=link)
     toast.show()
 
 
 def prewarm():
-    """Load Whisper on the GPU box ahead of the meeting (it is unloaded when idle so the GPU stays
-    free for other use); a cold load takes about a minute, the reminder comes a minute early."""
+    """Start loading Whisper on the GPU box (it is unloaded when idle so the GPU stays free for other
+    use); a cold load takes up to a minute, and Meetily queues live segments meanwhile."""
     def run():
         try:
             requests.post(f"http://127.0.0.1:{CONFIG['local_port']}/v1/live/warmup", timeout=180)
         except requests.RequestException:
             pass  # GPU box offline: Meetily falls back to local Parakeet
     threading.Thread(target=run, name="prewarm", daemon=True).start()
-
-
-def check(state):
-    """Called from the watcher loop; state is a dict persisted by the watcher."""
-    sent = state.setdefault("reminded", {})
-    now = dt.datetime.now().astimezone()
-    lead = dt.timedelta(minutes=RULES.get("minutes_before", 1))
-    for ev_id, name, start, end in todays_meetings():
-        key = f"{ev_id}@{start:%Y-%m-%dT%H:%M}"
-        if key in sent or skipped(name):
-            continue
-        if start - lead - dt.timedelta(seconds=30) <= now <= start + dt.timedelta(minutes=3):
-            sent[key] = now.isoformat()
-            if not meetily_recording():
-                prewarm()
-                show(name, start)
-                return name
-    # forget yesterday's keys
-    for key in [k for k, v in sent.items() if v[:10] < str(dt.date.today())]:
-        del sent[key]
-    return None
 
 
 def start_from_link(link):
@@ -142,7 +188,9 @@ if __name__ == "__main__":
     if cmd == "register":
         register()
     elif cmd == "test":
-        show(sys.argv[2] if len(sys.argv) > 2 else "Тестовая встреча", dt.datetime.now())
+        show(sys.argv[2] if len(sys.argv) > 2 else "Тестовая встреча")
+    elif cmd == "call":
+        print("call app using the mic:", active_call(), "| calendar event now:", current_event())
     elif cmd == "upcoming":
         for ev_id, name, start, end in todays_meetings():
             print(f"{start:%H:%M}-{end:%H:%M}  {'skip  ' if skipped(name) else 'remind'}  {name}")
