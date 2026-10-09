@@ -25,5 +25,10 @@
       "config_dir": "C:\\Users\\YOU\\.claude-fallback"
     }
   ],
-  "owner_name": "Your Name"
+  "owner_name": "Your Name",
+  "daily_name_contains": [
+    "Daily standup"
+  ],
+  "daily_name_contains_note": "Case-insensitive substrings of the calendar event or Meetily meeting name; matching meetings get short notes (daily_notes_prompt.md) and a tasks-only roll-up on daily_model.",
+  "daily_model": "sonnet"
 }

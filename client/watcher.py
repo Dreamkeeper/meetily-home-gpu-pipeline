@@ -304,7 +304,7 @@ def claude_accounts():
 LAST_ACCOUNT = None   # account that produced the most recent successful run
 
 
-def _run_claude(prompt, out, log_name):
+def _run_claude(prompt, out, log_name, model=None):
     """Headless Claude Code run with cwd = the transcripts root (it updates the shared files there).
 
     Tries the configured accounts in order and moves on only when one hits its usage limit;
@@ -316,7 +316,8 @@ def _run_claude(prompt, out, log_name):
         env = dict(os.environ)
         if acct.get("config_dir"):
             env["CLAUDE_CONFIG_DIR"] = acct["config_dir"]
-        r = subprocess.run([*CONFIG["notes_cmd"], "--add-dir", str(HERE), "-p", prompt], cwd=out.parent,
+        cmd = [*CONFIG["notes_cmd"], *(["--model", model] if model else []), "--add-dir", str(HERE), "-p", prompt]
+        r = subprocess.run(cmd, cwd=out.parent,
                            timeout=3600, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         logs.append(f"=== account: {acct['name']} (exit {r.returncode})\n{r.stdout}\n--- stderr ---\n{r.stderr}")
@@ -334,24 +335,42 @@ def _run_claude(prompt, out, log_name):
     raise RuntimeError(f"{log_name}: all Claude accounts hit their usage limit: " + " | ".join(limits))
 
 
-def run_notes(out):
-    """Cleaned transcript + notes. Returns False if Claude Code is not configured."""
+def is_daily(out, meta):
+    """Daily stand-up, by its calendar event (participants.json) or Meetily meeting name: lighter processing."""
+    names = [n.lower() for n in CONFIG.get("daily_name_contains", [])]
+    p = out / "participants.json"
+    event = json.loads(p.read_text(encoding="utf-8")).get("event") if p.exists() else None
+    title = f"{event or ''} | {meta.get('meeting_name') or ''}".lower()
+    return any(n in title for n in names)
+
+
+def daily_model():
+    return CONFIG.get("daily_model", "sonnet")
+
+
+def run_notes(out, daily=False):
+    """Cleaned transcript + notes (dailies: short notes only). Returns False if Claude Code is not configured."""
     if not _claude_available():
         return False
-    _run_claude(f"Read {HERE / 'notes_prompt.md'} and follow it for the meeting folder \"{out}\". "
-                "Write cleaned.md and notes.md there and update people.md. "
-                f"Recording owner: {CONFIG.get('owner_name', 'unknown')}.", out, "notes.log")
+    owner = f"Recording owner: {CONFIG.get('owner_name', 'unknown')}."
+    if daily:
+        _run_claude(f"Read {HERE / 'daily_notes_prompt.md'} and follow it for the meeting folder \"{out}\". "
+                    f"Write notes.md there. {owner}", out, "notes.log", model=daily_model())
+    else:
+        _run_claude(f"Read {HERE / 'notes_prompt.md'} and follow it for the meeting folder \"{out}\". "
+                    f"Write cleaned.md and notes.md there and update people.md. {owner}", out, "notes.log")
     if not (out / "notes.md").exists():
         raise RuntimeError("notes step finished without writing notes.md")
     return True
 
 
-def run_rollup(out):
-    """Fold one meeting into INDEX.md, tasks.md, glossary.md, people.md and projects/*.md."""
+def run_rollup(out, daily=False):
+    """Fold one meeting into INDEX.md, tasks.md, glossary.md, people.md and projects/*.md (dailies: tasks + INDEX)."""
     root = out.parent
     before = (root / "INDEX.md").read_text(encoding="utf-8") if (root / "INDEX.md").exists() else ""
-    _run_claude(f"Read {HERE / 'rollup_prompt.md'} and follow it for the meeting folder \"{out}\".",
-                out, "rollup.log")
+    prompt = "daily_rollup_prompt.md" if daily else "rollup_prompt.md"
+    _run_claude(f"Read {HERE / prompt} and follow it for the meeting folder \"{out}\".",
+                out, "rollup.log", model=daily_model() if daily else None)
     index = (root / "INDEX.md").read_text(encoding="utf-8") if (root / "INDEX.md").exists() else ""
     if f"[[{out.name}/notes]]" not in index:
         raise RuntimeError("roll-up finished but INDEX.md has no row for this meeting")
@@ -360,7 +379,7 @@ def run_rollup(out):
 
 def rollup_step(name, st):
     try:
-        run_rollup(pathlib.Path(st["out_dir"]))
+        run_rollup(pathlib.Path(st["out_dir"]), st.get("daily", False))
         st["rolled_up"] = True
         st.pop("rollup_error", None)
         log.info("%s: rolled up into INDEX/tasks/projects", name)
@@ -385,7 +404,7 @@ def rollup_retries(state):
 
 def notes_step(name, st):
     try:
-        st["status"] = "done" if run_notes(pathlib.Path(st["out_dir"])) else "notes_pending"
+        st["status"] = "done" if run_notes(pathlib.Path(st["out_dir"]), st.get("daily", False)) else "notes_pending"
         st["notes_account"] = LAST_ACCOUNT
         st.pop("notes_error", None)
         if st["status"] == "done":
@@ -431,6 +450,9 @@ def process(folder, meta, state, out=None):
                 log.info("%s: Bitrix24 event %r, %d participants", name, info["event"], len(info["participants"]))
         except Exception:  # participants are a hint for the notes step, never a blocker
             log.exception("%s: Bitrix24 lookup failed", name)
+        st["daily"] = is_daily(out, meta)
+        if st["daily"]:
+            log.info("%s: daily stand-up -> short notes (%s)", name, daily_model())
         notes_step(name, st)
     except Exception as exc:
         st["attempts"] += 1

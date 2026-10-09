@@ -15,6 +15,7 @@ Built for mostly-Russian meetings with English and Chinese parts (e.g. calls wit
   - Voice profiles of colleagues name the other speakers.
   - An optional Bitrix24 calendar lookup supplies the invited participants.
 - **Notes and memory:** Claude writes `cleaned.md` and `notes.md` per meeting, then rolls each meeting into `INDEX.md`, `tasks.md` (open/closed tasks with stable IDs), `glossary.md`, `people.md` and `projects/*.md`. Glossary terms are fed back as Whisper hotwords.
+- **Daily stand-ups** (matched by calendar or meeting name, `daily_name_contains`) get a short mode: per-person status, blockers and task changes on a cheaper model (`daily_model`, default Sonnet), and a roll-up that only updates `tasks.md`, `INDEX.md` and explicit project decisions.
 - **Automation:**
   - A watcher on the laptop picks up finished recordings and renames each meeting folder after its topic.
   - It sends Telegram notifications when a meeting is ready and when one fails, and handles Claude usage limits (waits for the reset or switches to a second account).
