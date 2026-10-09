@@ -19,7 +19,7 @@ Built for mostly-Russian meetings with English and Chinese parts (e.g. calls wit
 - **Automation:**
   - A watcher on the laptop picks up finished recordings and renames each meeting folder after its topic.
   - It sends Telegram notifications when a meeting is ready and when one fails, and handles Claude usage limits (waits for the reset or switches to a second account).
-  - When a call starts (Zoom, or any app listed in `call_apps`, starts using the microphone) and Meetily isn't recording, a Windows toast offers a one-click "Записать" (start recording). The calendar event running at that moment, if any, names the recording; ad-hoc calls get the reminder too.
+  - When a call starts (Zoom, or any app listed in `call_apps`, starts using the microphone) and Meetily isn't recording, a small always-on-top window (not a Windows toast, so Do Not Disturb doesn't hide it; it never takes focus) offers a one-click "Записать" (start recording). The calendar event running at that moment, if any, names the recording; ad-hoc calls get the reminder too.
 
 ```
 LAPTOP                                              GPU BOX (e.g. desktop with an NVIDIA card)
@@ -54,7 +54,7 @@ client/watcher.py ── finished recording ──────────► jo
 6. Updates: `git pull`, or `server\update.ps1`, which pulls, re-syncs packages and restarts only when no job is running. A read-only GitHub deploy key works well for pulling a private fork.
 
 ### Laptop (normal, non-admin PowerShell)
-1. Install the Python packages from a normal terminal: `pip install requests numpy winotify`. (Not from the Claude desktop app's terminal: it redirects `AppData`, so the scheduled watcher wouldn't see packages installed with `--user`.)
+1. Install the Python packages from a normal terminal: `pip install requests numpy` (with the standard Python installer's tkinter). (Not from the Claude desktop app's terminal: it redirects `AppData`, so the scheduled watcher wouldn't see packages installed with `--user`.)
 2. Add an SSH host alias for the GPU box, e.g. `gpu-box`, using key authentication.
 3. Install the Claude Code CLI and log in.
    - Optional second account for usage-limit fallback: `$env:CLAUDE_CONFIG_DIR="$env:USERPROFILE\.claude-fallback"; claude`, then `/login`.

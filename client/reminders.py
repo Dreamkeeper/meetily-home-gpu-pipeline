@@ -138,13 +138,67 @@ def on_call_start(app):
 
 
 def show(name, app="Zoom"):
-    from winotify import Notification
-    link = f"{PROTOCOL}:{urllib.parse.quote(name or '')}"
-    toast = Notification(app_id="Meetily", title=f"Звонок в {app} начался",
-                         msg=f"«{name}» — записать в Meetily?" if name else "Записать в Meetily?",
-                         duration="long")
-    toast.add_actions(label="Записать", launch=link)
-    toast.show()
+    """Open the reminder window in its own process (Tk needs a main thread; the watcher's are busy)."""
+    pyw = pathlib.Path(sys.executable).with_name("pythonw.exe")
+    subprocess.Popen([str(pyw), str(pathlib.Path(__file__).resolve()), "popup", name or "", app],
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def popup(name, app, timeout_s=300):
+    """Always-on-top reminder window in the bottom-right corner.
+
+    Not a Windows toast: Do Not Disturb sends toasts straight to the notification center. The window
+    never takes focus (WS_EX_NOACTIVATE), so typing in the call app isn't interrupted, and it has no
+    taskbar button (WS_EX_TOOLWINDOW). Closes by itself after timeout_s.
+    """
+    import ctypes
+    import ctypes.wintypes
+    import tkinter as tk
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)   # sharp text on scaled displays
+    except (AttributeError, OSError):
+        pass
+    bg, fg, muted, accent, accent_hover, neutral = "#202020", "#ffffff", "#c8c8c8", "#c42b1c", "#a32316", "#3a3a3a"
+    root = tk.Tk()
+    root.withdraw()
+    scale = root.winfo_fpixels("1i") / 96
+
+    def px(v):
+        return int(v * scale)
+
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.configure(bg=bg, highlightthickness=1, highlightbackground="#4a4a4a")
+    body = tk.Frame(root, bg=bg, padx=px(18), pady=px(14))
+    body.pack(fill="both", expand=True)
+    tk.Label(body, text=f"● Звонок в {app} начался", bg=bg, fg=fg, anchor="w",
+             font=("Segoe UI Semibold", 12)).pack(fill="x")
+    tk.Label(body, text=f"«{name}» — записать в Meetily?" if name else "Записать в Meetily?", bg=bg, fg=muted,
+             anchor="w", justify="left", wraplength=px(340), font=("Segoe UI", 10)).pack(fill="x", pady=(px(4), px(12)))
+    row = tk.Frame(body, bg=bg)
+    row.pack(fill="x")
+
+    def record():
+        root.destroy()
+        start_from_link(f"{PROTOCOL}:{urllib.parse.quote(name or '')}")
+
+    style = dict(fg=fg, activeforeground=fg, relief="flat", borderwidth=0, cursor="hand2", padx=px(16), pady=px(6))
+    tk.Button(row, text="Записать", command=record, bg=accent, activebackground=accent_hover,
+              font=("Segoe UI Semibold", 10), **style).pack(side="left")
+    tk.Button(row, text="Не надо", command=root.destroy, bg=neutral, activebackground="#4a4a4a",
+              font=("Segoe UI", 10), **style).pack(side="left", padx=(px(8), 0))
+
+    root.update_idletasks()
+    w, h = max(root.winfo_reqwidth(), px(380)), root.winfo_reqheight()
+    work = ctypes.wintypes.RECT()   # desktop minus the taskbar
+    ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(work), 0)   # SPI_GETWORKAREA
+    root.geometry(f"{w}x{h}+{work.right - w - px(16)}+{work.bottom - h - px(16)}")
+    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+    exstyle = ctypes.windll.user32.GetWindowLongW(hwnd, -20)   # GWL_EXSTYLE
+    ctypes.windll.user32.SetWindowLongW(hwnd, -20, exstyle | 0x08000000 | 0x80)   # NOACTIVATE | TOOLWINDOW
+    root.deiconify()
+    root.after(timeout_s * 1000, root.destroy)
+    root.mainloop()
 
 
 def prewarm():
@@ -189,6 +243,8 @@ if __name__ == "__main__":
         register()
     elif cmd == "test":
         show(sys.argv[2] if len(sys.argv) > 2 else "Тестовая встреча")
+    elif cmd == "popup":
+        popup(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "Zoom")
     elif cmd == "call":
         print("call app using the mic:", active_call(), "| calendar event now:", current_event())
     elif cmd == "upcoming":
