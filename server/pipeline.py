@@ -47,7 +47,11 @@ _models = {}
 
 
 def log(msg):
-    print(f"[pipeline] {msg}", flush=True)
+    """Progress line on stdout; never lets a console/log encoding (e.g. cp1251 and Chinese text) fail a job."""
+    try:
+        print(f"[pipeline] {msg}", flush=True)
+    except UnicodeEncodeError:
+        print(f"[pipeline] {msg}".encode("ascii", "backslashreplace").decode("ascii"), flush=True)
 
 
 def channel_count(path):

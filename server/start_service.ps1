@@ -7,6 +7,7 @@ if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8765 -State Listen -
 $env:HF_HUB_OFFLINE = '1'                # models are cached; never download at runtime
 $env:HF_HUB_DISABLE_SYMLINKS_WARNING = '1'
 $env:PYTHONUNBUFFERED = '1'
+$env:PYTHONIOENCODING = 'utf-8'           # logs get Chinese/Russian text; the console code page can't hold it
 # Start-Process truncates redirect targets, so keep the previous run's logs as *.prev.log
 foreach ($name in 'service.out', 'service.err') {
     $f = Join-Path $root "$name.log"
