@@ -496,6 +496,8 @@ def claude_steps(state):
         save_state(state)
     for name, st in rollup_retries(state):
         rollup_step(name, st)
+        if st.get("rolled_up"):
+            announce(name, st)   # no-op if the 'meeting ready' message already went out
         save_state(state)
 
 

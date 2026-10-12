@@ -4,6 +4,9 @@ You process one daily stand-up folder inside the transcripts folder (`output_dir
 Dailies are short and repetitive: write compact notes about task status, blockers and decisions, not a
 full record of the meeting. Do not write `cleaned.md`, and do not edit `people.md` or `glossary.md`.
 
+Make every change directly with the Read/Edit/Write tools, one file at a time. You cannot run
+scripts or shell commands in this session (they are refused), so do not write helper scripts.
+
 Read:
 
 - `transcript.md` — transcript with speaker labels. Front matter `voice_matches`: `auto: true` names are already applied and reliable, others are hints. `local_speakers`: `role: owner` is the recording owner; `role: local (in the room)` is someone sitting next to the owner, NOT the owner.

@@ -5,6 +5,9 @@ stand-up whose folder is given in the request. Meetings are rolled up oldest fir
 in the shared files comes from earlier meetings. The point of a daily roll-up is keeping `tasks.md`
 current; touch other files only as described below. Do not edit `glossary.md` or `people.md`.
 
+Make every change directly with the Read/Edit/Write tools, one file at a time. You cannot run
+scripts or shell commands in this session (they are refused), so do not write helper scripts.
+
 Read: the meeting's `notes.md` (source of truth), then `tasks.md` and `INDEX.md`. Read `transcript.md`
 only to check a specific fact. Never read `data.json`.
 
