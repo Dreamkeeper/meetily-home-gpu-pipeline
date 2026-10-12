@@ -36,6 +36,8 @@ BASE = f"http://127.0.0.1:{CONFIG['local_port']}"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 STALE_RUN_S = 4 * 3600   # a "running" entry older than this is a crashed run
+# The main loop transcribes and the notes thread runs Claude; both touch the shared state dict
+STATE_LOCK = threading.RLock()
 
 log = logging.getLogger("watcher")
 
@@ -120,10 +122,19 @@ def load_state():
 
 
 def save_state(state):
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    with STATE_LOCK:
+        for attempt in range(5):
+            try:
+                text = json.dumps(state, ensure_ascii=False, indent=1)
+                break
+            except RuntimeError:   # the other thread updated its meeting's entry mid-dump; try again
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(STATE_FILE)
 
 
 def candidates(state):
@@ -144,9 +155,19 @@ def candidates(state):
         if st.get("status") in ("done", "notes_pending", "notes_error") or st.get("next_try", 0) > time.time():
             continue
         # another run (e.g. a manual --folder run) owns it; only take over if that run is clearly dead
-        if st.get("status") == "running" and time.time() - st.get("started", 0) < STALE_RUN_S:
+        if (st.get("status") == "running" and time.time() - st.get("started", 0) < STALE_RUN_S
+                and pid_alive(st.get("pid"))):
             continue
         yield d, meta
+
+
+def pid_alive(pid):
+    """Whether the process that marked a meeting "running" still exists (unknown pid: assume yes)."""
+    if not pid or pid == os.getpid():
+        return True
+    out = subprocess.run(["tasklist", "/fi", f"PID eq {pid}", "/nh"], capture_output=True, text=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    return str(pid) in out
 
 
 def recording_seconds(folder, meta):
@@ -164,10 +185,11 @@ def recording_seconds(folder, meta):
 
 
 def notes_retries(state):
-    """Meetings whose transcript exists but whose notes step has not succeeded yet."""
-    for name, st in state.items():
-        if st.get("status") in ("notes_pending", "notes_error") and st.get("next_try", 0) <= time.time():
-            yield name, st
+    """Meetings whose transcript exists but whose notes step has not succeeded yet, oldest first."""
+    with STATE_LOCK:
+        pending = [(name, st) for name, st in state.items()
+                   if st.get("status") in ("notes_pending", "notes_error") and st.get("next_try", 0) <= time.time()]
+    return sorted(pending, key=lambda item: pathlib.Path(item[1].get("out_dir", "")).name)
 
 
 class Tunnel:
@@ -396,9 +418,10 @@ def rollup_step(name, st):
 
 def rollup_retries(state):
     """Done meetings not yet folded into the shared files, oldest first (later meetings close tasks)."""
-    pending = [(name, st) for name, st in state.items()
-               if st.get("status") == "done" and not st.get("rolled_up")
-               and st.get("rollup_next_try", 0) <= time.time() and st.get("out_dir")]
+    with STATE_LOCK:
+        pending = [(name, st) for name, st in state.items()
+                   if st.get("status") == "done" and not st.get("rolled_up")
+                   and st.get("rollup_next_try", 0) <= time.time() and st.get("out_dir")]
     return sorted(pending, key=lambda item: pathlib.Path(item[1]["out_dir"]).name)
 
 
@@ -428,8 +451,9 @@ def notes_step(name, st):
 
 def process(folder, meta, state, out=None):
     name = folder.name
-    st = state.setdefault(name, {"attempts": 0})
-    st.update(status="running", started=time.time())
+    with STATE_LOCK:
+        st = state.setdefault(name, {"attempts": 0})
+        st.update(status="running", started=time.time(), pid=os.getpid())
     save_state(state)
     try:
         src, channels = source_audio(folder, meta)
@@ -453,7 +477,8 @@ def process(folder, meta, state, out=None):
         st["daily"] = is_daily(out, meta)
         if st["daily"]:
             log.info("%s: daily stand-up -> short notes (%s)", name, daily_model())
-        notes_step(name, st)
+        st.pop("next_try", None)
+        st["status"] = "notes_pending"   # picked up by the notes thread (claude_steps)
     except Exception as exc:
         st["attempts"] += 1
         delay = min(3600, 120 * 2 ** (st["attempts"] - 1))
@@ -462,6 +487,26 @@ def process(folder, meta, state, out=None):
         alert_failure(name, "transcription", exc, st["attempts"])
     finally:
         save_state(state)
+
+
+def claude_steps(state):
+    """Notes, then roll-ups, for transcribed meetings, oldest first (later meetings close tasks)."""
+    for name, st in notes_retries(state):
+        notes_step(name, st)
+        save_state(state)
+    for name, st in rollup_retries(state):
+        rollup_step(name, st)
+        save_state(state)
+
+
+def notes_worker(state):
+    """Claude steps in their own thread, so the GPU box transcribes the next meeting meanwhile."""
+    while True:
+        try:
+            claude_steps(state)
+        except Exception:
+            log.exception("notes thread failed")
+        time.sleep(15)
 
 
 def call_watcher():
@@ -515,19 +560,17 @@ def main():
     if args.folder:
         folder = pathlib.Path(CONFIG["recordings_dir"]) / args.folder
         process(folder, json.loads((folder / "metadata.json").read_text(encoding="utf-8")), state, args.out)
+        claude_steps(state)
         return
     threading.Thread(target=tunnel_keeper, name="tunnel-keeper", daemon=True).start()
     threading.Thread(target=call_watcher, name="call-watcher", daemon=True).start()
+    if not args.once:
+        threading.Thread(target=notes_worker, args=(state,), name="notes", daemon=True).start()
     while True:
         for folder, meta in list(candidates(state)):
             process(folder, meta, state)
-        for name, st in list(notes_retries(state)):
-            notes_step(name, st)
-            save_state(state)
-        for name, st in rollup_retries(state):
-            rollup_step(name, st)
-            save_state(state)
         if args.once:
+            claude_steps(state)
             return
         time.sleep(CONFIG["poll_s"])
 
