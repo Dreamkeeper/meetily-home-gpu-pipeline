@@ -26,6 +26,7 @@ import folders
 import notify
 import reminders
 import render
+import share
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONFIG = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
@@ -557,6 +558,7 @@ def notes_worker(state):
     while True:
         try:
             claude_steps(state)
+            share.refresh_all(log)   # share PDFs for new or edited notes
         except Exception:
             log.exception("notes thread failed")
         time.sleep(15)

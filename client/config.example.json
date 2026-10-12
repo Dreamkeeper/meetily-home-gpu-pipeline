@@ -33,5 +33,7 @@
   "daily_model": "sonnet",
   "partner_summary_min_english": 0.25,
   "partner_summary_min_english_note": "Meetings (not dailies) with at least this share of English speech get summary-en.txt (partner_summary_prompt.md, plain-text WeChat message) sent to Telegram for copying.",
-  "partner_summary_model": "sonnet"
+  "partner_summary_model": "sonnet",
+  "share_dir": "C:\\Users\\YOU\\Documents\\Meeting shares",
+  "share_dir_note": "One PDF per meeting (notes + Chinese-chatter summary + cleaned transcript), named after the meeting folder (share.py)."
 }
