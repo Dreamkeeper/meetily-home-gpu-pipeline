@@ -255,10 +255,12 @@ def transcribe_turns(audio, turns, stereo=None, hotwords=None):
     return out
 
 
-def whisper_reference(audio, hotwords=None):
-    # hotwords: canonical terms from the client's glossary (brands, products) to bias spellings
+def whisper_reference(audio):
+    # No hotwords here: in the batched pipeline a ~400-character glossary prompt made this pass ~6x
+    # slower (12 min instead of 1-2 for an hour). The notes step fixes spellings from the glossary anyway;
+    # per-chunk English decoding (whisper_decode) keeps the hotwords, where they cost ~10%.
     segs, _ = whisper().transcribe(audio, language="ru", batch_size=16, vad_filter=True,
-                                   condition_on_previous_text=False, beam_size=5, hotwords=hotwords or None)
+                                   condition_on_previous_text=False, beam_size=5)
     return [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()} for s in segs]
 
 
@@ -295,7 +297,7 @@ def process(audio_path, num_speakers=None, min_speakers=None, max_speakers=None,
     reference = []
     if with_whisper:
         t = time.perf_counter()
-        reference = whisper_reference(audio, hotwords)
+        reference = whisper_reference(audio)
         timings["whisper"] = time.perf_counter() - t
         log(f"whisper reference: {len(reference)} segments in {timings['whisper']:.0f}s")
 
