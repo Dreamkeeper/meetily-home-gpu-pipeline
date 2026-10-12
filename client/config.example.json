@@ -30,5 +30,8 @@
     "Daily standup"
   ],
   "daily_name_contains_note": "Case-insensitive substrings of the calendar event or Meetily meeting name; matching meetings get short notes (daily_notes_prompt.md) and a tasks-only roll-up on daily_model.",
-  "daily_model": "sonnet"
+  "daily_model": "sonnet",
+  "partner_summary_min_english": 0.25,
+  "partner_summary_min_english_note": "Meetings (not dailies) with at least this share of English speech get summary-en.txt (partner_summary_prompt.md, plain-text WeChat message) sent to Telegram for copying.",
+  "partner_summary_model": "sonnet"
 }

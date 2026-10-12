@@ -366,6 +366,17 @@ def is_daily(out, meta):
     return any(n in title for n in names)
 
 
+def english_share(out):
+    """Share of English speech in the meeting, from the speakers' per-language seconds in data.json."""
+    data = json.loads((out / "data.json").read_text(encoding="utf-8"))
+    secs = {}
+    for sp in data.get("speakers", {}).values():
+        for lang, s in (sp.get("lang_s") or {}).items():
+            secs[lang] = secs.get(lang, 0) + s
+    total = sum(secs.values())
+    return secs.get("en", 0) / total if total else 0.0
+
+
 def daily_model():
     return CONFIG.get("daily_model", "sonnet")
 
@@ -384,6 +395,39 @@ def run_notes(out, daily=False):
     if not (out / "notes.md").exists():
         raise RuntimeError("notes step finished without writing notes.md")
     return True
+
+
+def run_partner_summary(out):
+    """English plain-text summary for the other side of a partner call (summary-en.txt)."""
+    _run_claude(f"Read {HERE / 'partner_summary_prompt.md'} and follow it for the meeting folder \"{out}\". "
+                f"Write summary-en.txt there. Recording owner: {CONFIG.get('owner_name', 'unknown')}.",
+                out, "summary-en.log", model=CONFIG.get("partner_summary_model", "sonnet"))
+    if not (out / "summary-en.txt").exists():
+        raise RuntimeError("partner summary step finished without writing summary-en.txt")
+
+
+def partner_summary_step(name, st):
+    """After notes: English summary for partner calls, sent to Telegram for copying into WeChat."""
+    try:
+        out = pathlib.Path(st["out_dir"])
+        if not (out / "summary-en.txt").exists():
+            run_partner_summary(out)
+        notify.partner_summary(out)
+        st["summary_en"] = True
+        log.info("%s: English partner summary written and sent", name)
+    except Exception as exc:
+        if handle_usage_limit(name, st, exc, "summary", "summary_next_try"):
+            return
+        st["summary_attempts"] = st.get("summary_attempts", 0) + 1
+        st["summary_next_try"] = time.time() + 600 * st["summary_attempts"]
+        log.exception("%s: English partner summary failed (attempt %d)", name, st["summary_attempts"])
+
+
+def partner_summary_retries(state):
+    with STATE_LOCK:
+        return [(name, st) for name, st in state.items()
+                if st.get("partner") and st.get("status") == "done" and not st.get("summary_en")
+                and st.get("summary_attempts", 0) < 3 and st.get("summary_next_try", 0) <= time.time()]
 
 
 def run_rollup(out, daily=False):
@@ -477,6 +521,10 @@ def process(folder, meta, state, out=None):
         st["daily"] = is_daily(out, meta)
         if st["daily"]:
             log.info("%s: daily stand-up -> short notes (%s)", name, daily_model())
+        share = english_share(out)
+        st["partner"] = not st["daily"] and share >= CONFIG.get("partner_summary_min_english", 0.25)
+        if st["partner"]:
+            log.info("%s: %.0f%% English -> partner call, English summary after the notes", name, share * 100)
         st.pop("next_try", None)
         st["status"] = "notes_pending"   # picked up by the notes thread (claude_steps)
     except Exception as exc:
@@ -498,6 +546,9 @@ def claude_steps(state):
         rollup_step(name, st)
         if st.get("rolled_up"):
             announce(name, st)   # no-op if the 'meeting ready' message already went out
+        save_state(state)
+    for name, st in partner_summary_retries(state):
+        partner_summary_step(name, st)
         save_state(state)
 
 
@@ -548,15 +599,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--folder")
+    ap.add_argument("--summary-en", metavar="MEETING_FOLDER",
+                    help="write and send the English partner summary for one transcripts folder, then exit")
     ap.add_argument("--out", help="with --folder: write here instead of the transcripts folder (testing)")
     args = ap.parse_args()
     (HERE / "state").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[logging.FileHandler(HERE / "state" / "watcher.log", encoding="utf-8"),
                                   *([logging.StreamHandler(sys.stdout)] if sys.stdout else [])])
-    guard = single_instance() if not args.folder else None
-    if args.folder is None and guard is None:
+    guard = single_instance() if not (args.folder or args.summary_en) else None
+    if args.folder is None and not args.summary_en and guard is None:
         log.info("another watcher is already running; exiting")
+        return
+    if args.summary_en:
+        out = pathlib.Path(args.summary_en)
+        out = out if out.is_absolute() else pathlib.Path(CONFIG["output_dir"]) / out
+        run_partner_summary(out)
+        notify.partner_summary(out)
+        print((out / "summary-en.txt").read_text(encoding="utf-8"))
         return
     state = load_state()
     if args.folder:

@@ -49,14 +49,25 @@ def configured():
     return bool(_token() and CHAT_FILE.exists())
 
 
-def send(text):
+def send(text, parse_mode="HTML"):
     if not configured():
         return False
     chat = json.loads(CHAT_FILE.read_text(encoding="utf-8"))["chat_id"]
     if len(text) > MAX_LEN:
         text = text[:MAX_LEN].rsplit("\n", 1)[0] + "\n…"
-    _api("sendMessage", chat_id=chat, text=text, parse_mode="HTML", disable_web_page_preview=True)
+    params = dict(chat_id=chat, text=text, disable_web_page_preview=True)
+    if parse_mode:
+        params["parse_mode"] = parse_mode
+    _api("sendMessage", **params)
     return True
+
+
+def partner_summary(out):
+    """The English WeChat summary as its own plain message, so a long-press copies exactly the text."""
+    out = pathlib.Path(out)
+    text = (out / "summary-en.txt").read_text(encoding="utf-8").strip()
+    send(f"💬 Summary for WeChat, {html.escape(out.name)} (check, then copy the next message):")
+    return send(text, parse_mode=None)
 
 
 def _section(md, title):
