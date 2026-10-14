@@ -137,10 +137,26 @@ def needs_update(folder):
     return not out.exists() or out.stat().st_mtime < newest
 
 
+UNTITLED = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}-\d{2}")   # folder not yet renamed after its notes' short_title
+
+
+def drop_untitled_pdfs(log=None):
+    """Remove "<date time>.pdf" left from before the folder got its title, once the titled PDF exists."""
+    titled = {f.name[:16] for f in SHARE_DIR.glob("*.pdf") if not UNTITLED.fullmatch(f.stem)}
+    for f in SHARE_DIR.glob("*.pdf"):
+        if UNTITLED.fullmatch(f.stem) and f.stem in titled:
+            f.unlink()
+            if log:
+                log.info("share PDF: removed %s (superseded by the titled one)", f.name)
+
+
 def refresh_all(log=None):
-    """(Re)render every meeting whose PDF is missing or stale; returns the rendered paths."""
+    """(Re)render every meeting whose PDF is missing or stale; returns the rendered paths. Folders still named
+    only "<date time>" are skipped: the notes step renames them right after writing notes.md."""
     done = []
     for folder in sorted(d for d in ROOT.iterdir() if d.is_dir() and re.match(r"\d{4}-\d{2}-\d{2} ", d.name)):
+        if UNTITLED.fullmatch(folder.name):
+            continue
         if needs_update(folder):
             try:
                 done.append(make_pdf(folder))
@@ -151,6 +167,8 @@ def refresh_all(log=None):
                     log.exception("share PDF failed for %s", folder.name)
                 else:
                     raise
+    if SHARE_DIR.exists():
+        drop_untitled_pdfs(log)
     return done
 
 
