@@ -10,8 +10,10 @@ import html
 import json
 import pathlib
 import re
+import socket
 import sys
 import time
+import urllib.parse
 
 import requests
 
@@ -27,11 +29,30 @@ def _token():
     return TOKEN_FILE.read_text(encoding="utf-8").strip() if TOKEN_FILE.exists() else None
 
 
+def routes():
+    """[(name, proxies)]: direct first, then the local VPN proxy, but only while something listens on it
+    (it was Clash Verge's port; trying a dead port just hides the direct attempt's real error)."""
+    out = [("direct", None)]
+    u = urllib.parse.urlparse(FALLBACK_PROXY or "")
+    if u.hostname and u.port:
+        try:
+            with socket.create_connection((u.hostname, u.port), timeout=1):
+                out.append(("proxy", {"https": FALLBACK_PROXY}))
+        except OSError:
+            pass
+    return out
+
+
+def unreachable(what, errors):
+    """One error naming every route tried, e.g. 'Telegram sendMessage unreachable: direct: ConnectTimeout …'."""
+    return RuntimeError(f"{what} unreachable: " + "; ".join(f"{n}: {type(e).__name__}: {str(e)[:160]}" for n, e in errors))
+
+
 def _api(method, **params):
-    """Call the Bot API directly; on network failure retry through the local VPN proxy."""
+    """Call the Bot API directly; on network failure retry through the local VPN proxy if it is running."""
     url = f"https://api.telegram.org/bot{_token()}/{method}"
-    last = None
-    for proxies in (None, {"https": FALLBACK_PROXY}):
+    errors = []
+    for name, proxies in routes():
         for _ in range(2):
             try:
                 r = requests.post(url, json=params, timeout=30, proxies=proxies)
@@ -40,9 +61,9 @@ def _api(method, **params):
                     raise RuntimeError(f"Telegram {method}: {data.get('description')}")
                 return data["result"]
             except requests.RequestException as exc:
-                last = exc
+                errors.append((name, exc))
                 time.sleep(3)
-    raise last
+    raise unreachable(f"Telegram {method}", errors)
 
 
 def configured():

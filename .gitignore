@@ -17,6 +17,11 @@ meetily-build/*.log
 meetily-build/libclang18/
 meetily-build/*.diff
 
+# btasks-service build/dev leftovers
+btasks-service/server/tests/.dev_url
+btasks-release.tar.gz
+.pytest_cache/
+
 # Local configuration (copy from the *.example.json files)
 client/config.json
 client/reminder_rules.json

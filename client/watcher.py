@@ -617,7 +617,7 @@ BTASKS_PULL_S = 300
 def notes_worker(state):
     """Claude steps in their own thread, so the GPU box transcribes the next meeting meanwhile. Bitrix links
     are pulled into tasks.md here too, so they never race a roll-up editing the same file."""
-    last_pull = 0.0
+    last_pull, pull_failures = 0.0, 0
     while True:
         try:
             claude_steps(state)
@@ -627,10 +627,19 @@ def notes_worker(state):
         if btasks.configured() and time.time() - last_pull > BTASKS_PULL_S:
             last_pull = time.time()
             try:
-                if btasks.pull():
-                    log.info("Bitrix24 links written into tasks.md")
+                linked = btasks.pull()
             except Exception as exc:
-                log.warning("Bitrix24 links not pulled: %s", exc)
+                # a pull that fails loses nothing (the next one gets the full list again): stay quiet on blips,
+                # warn after 15 min of failures, after an hour, then every 6 hours
+                pull_failures += 1
+                if pull_failures in (3, 12) or pull_failures % 72 == 0:
+                    log.warning("Bitrix24 links not pulled (%d tries in a row): %s", pull_failures, exc)
+            else:
+                if pull_failures >= 3:
+                    log.info("Bitrix24 links pull works again after %d failed tries", pull_failures)
+                pull_failures = 0
+                if linked:
+                    log.info("Bitrix24 links written into tasks.md")
         time.sleep(15)
 
 
