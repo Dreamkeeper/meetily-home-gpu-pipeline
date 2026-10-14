@@ -91,8 +91,10 @@ def _md_bold(text):
     return re.sub(r"\*\*(.+?)\*\*", lambda m: f"<b>{m.group(1)}</b>", text)
 
 
-def meeting_ready(out, rollup_ok=True, fallback_account=None):
-    """Compose the 'meeting processed' message from notes.md."""
+def meeting_ready(out, rollup_ok=True, fallback_account=None, deliver=True, bitrix_hint=True):
+    """Compose the 'meeting processed' message from notes.md and send it (deliver=False: return the text,
+    for the Bitrix24 tasks service, whose bot posts it with the review button; bitrix_hint=False drops the
+    'say it in the work Claude Code' line that the button replaces)."""
     out = pathlib.Path(out)
     md = (out / "notes.md").read_text(encoding="utf-8")
     front = md.split("---")[1] if md.startswith("---") else ""
@@ -121,7 +123,7 @@ def meeting_ready(out, rollup_ok=True, fallback_account=None):
     if not rollup_ok:
         lines += ["", "⚠️ Сводка (INDEX/tasks/projects) не обновилась, будет повтор."]
     lines += ["", f"<code>{e(str(out / 'notes.md'))}</code>"]
-    return send("\n".join(lines))
+    return send("\n".join(lines)) if deliver else "\n".join(lines)
 
 
 def failure(meeting, stage, error, attempt):

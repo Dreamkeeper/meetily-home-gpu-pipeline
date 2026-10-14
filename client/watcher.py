@@ -22,6 +22,7 @@ import time
 import requests
 
 import bitrix
+import btasks
 import folders
 import notify
 import reminders
@@ -106,16 +107,70 @@ def handle_usage_limit(name, st, exc, stage, next_try_key):
 
 
 def announce(name, st):
-    """'Meeting ready' message, once per meeting."""
+    """'Meeting ready' message, once per meeting. With the Bitrix24 tasks service configured, the service's bot
+    posts it with the «Проверить задачи» button; if drafting or the service fails, the plain message goes out
+    now and the button follows from btasks_retries."""
     if st.get("notified"):
         return
     try:
         primary = claude_accounts()[0]["name"] if claude_accounts() else None
         fallback = st.get("notes_account") if st.get("notes_account") not in (None, primary) else None
-        if notify.meeting_ready(st["out_dir"], rollup_ok=bool(st.get("rolled_up")), fallback_account=fallback):
+        use_btasks = btasks.configured()
+        if use_btasks:
+            st["btasks"] = "pending"   # tasks.md IDs exist only after the roll-up
+            if st.get("rolled_up"):
+                text = notify.meeting_ready(st["out_dir"], rollup_ok=True, fallback_account=fallback,
+                                            deliver=False, bitrix_hint=False)
+                if bitrix_step(name, st, summary=text):
+                    st["notified"] = True
+                    return
+        if notify.meeting_ready(st["out_dir"], rollup_ok=bool(st.get("rolled_up")), fallback_account=fallback,
+                                bitrix_hint=not use_btasks):
             st["notified"] = True
     except Exception:
         log.exception("%s: Telegram notification not sent", name)
+
+
+def run_bitrix_draft(out):
+    """Draft the meeting's Bitrix24 tasks into bitrix-draft.json (reviewed and approved in the Mini App)."""
+    _run_claude(f"Read {HERE / 'bitrix_draft_prompt.md'} and follow it for the meeting folder \"{out}\". "
+                f"Write {btasks.DRAFT} there.", out, "bitrix-draft.log", model=CONFIG.get("bitrix_draft_model", "sonnet"))
+    try:
+        btasks.load_draft(out)
+    except Exception:
+        if (out / btasks.DRAFT).exists():   # keep it for inspection; the next attempt drafts again
+            (out / btasks.DRAFT).replace(out / "bitrix-draft.bad.json")
+        raise
+
+
+def bitrix_step(name, st, summary=None):
+    """Draft once, then hand the meeting to the tasks service. True when the service has it."""
+    try:
+        out = pathlib.Path(st["out_dir"])
+        if not (out / btasks.DRAFT).exists():
+            run_bitrix_draft(out)
+        r = btasks.push(out, summary)
+        st["btasks"] = "pushed"
+        st.pop("btasks_error", None)
+        log.info("%s: Bitrix24 draft sent to the tasks service (%s new)", name, r.get("added"))
+        return True
+    except Exception as exc:
+        st["btasks"] = "pending"
+        if handle_usage_limit(name, st, exc, "задачи для Bitrix24", "btasks_next_try"):
+            return False
+        st["btasks_attempts"] = st.get("btasks_attempts", 0) + 1
+        st.update(btasks_error=f"{type(exc).__name__}: {exc}",
+                  btasks_next_try=time.time() + 600 * 2 ** (st["btasks_attempts"] - 1))
+        log.exception("%s: Bitrix24 draft/push failed (attempt %d)", name, st["btasks_attempts"])
+        return False
+
+
+def btasks_retries(state):
+    with STATE_LOCK:
+        return [(name, st) for name, st in state.items()
+                if st.get("btasks") == "pending" and st.get("status") == "done" and st.get("rolled_up")
+                and st.get("notified") and st.get("btasks_attempts", 0) < 4
+                and st.get("btasks_next_try", 0) <= time.time()]
 
 
 def load_state():
@@ -551,16 +606,31 @@ def claude_steps(state):
     for name, st in partner_summary_retries(state):
         partner_summary_step(name, st)
         save_state(state)
+    for name, st in btasks_retries(state):
+        bitrix_step(name, st)   # the summary already went out; the service posts a short message with the button
+        save_state(state)
+
+
+BTASKS_PULL_S = 300
 
 
 def notes_worker(state):
-    """Claude steps in their own thread, so the GPU box transcribes the next meeting meanwhile."""
+    """Claude steps in their own thread, so the GPU box transcribes the next meeting meanwhile. Bitrix links
+    are pulled into tasks.md here too, so they never race a roll-up editing the same file."""
+    last_pull = 0.0
     while True:
         try:
             claude_steps(state)
             share.refresh_all(log)   # share PDFs for new or edited notes
         except Exception:
             log.exception("notes thread failed")
+        if btasks.configured() and time.time() - last_pull > BTASKS_PULL_S:
+            last_pull = time.time()
+            try:
+                if btasks.pull():
+                    log.info("Bitrix24 links written into tasks.md")
+            except Exception as exc:
+                log.warning("Bitrix24 links not pulled: %s", exc)
         time.sleep(15)
 
 

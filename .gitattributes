@@ -1,0 +1,2 @@
+# Server-side files are deployed byte-for-byte to Linux
+btasks-service/** text eol=lf
