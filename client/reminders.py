@@ -2,6 +2,7 @@
 
   python reminders.py register          # register the meetily-record: link handler (current user, no admin)
   python reminders.py test ["Название"] # show a reminder now
+  python reminders.py test-stop          # show the end-of-call 'stop recording?' reminder
   python reminders.py call              # is a call app using the mic right now, and which calendar event is on
   python reminders.py upcoming          # list today's Bitrix24 meetings and whether each would get a reminder
   python reminders.py start "<meetily-record:...>"   # used by the link handler
@@ -137,14 +138,28 @@ def on_call_start(app):
     return name or APP_LABELS.get(app, app)
 
 
-def show(name, app="Zoom"):
-    """Open the reminder window in its own process (Tk needs a main thread; the watcher's are busy)."""
+def on_call_end(app):
+    """Reminder to stop Meetily when the call is over but it is still recording; True if shown."""
+    if not meetily_recording():
+        return False
+    show(None, APP_LABELS.get(app, app), mode="stop")
+    return True
+
+
+def stop_recording():
+    """Ask the running Meetily to stop and save the recording (fork's --stop-recording)."""
+    subprocess.Popen([str(MEETILY), "--stop-recording"])
+
+
+def show(name, app="Zoom", mode="start"):
+    """Open the reminder window in its own process (Tk needs a main thread; the watcher's are busy).
+    mode "start": the call began, offer to record; mode "stop": the call ended, offer to stop."""
     pyw = pathlib.Path(sys.executable).with_name("pythonw.exe")
-    subprocess.Popen([str(pyw), str(pathlib.Path(__file__).resolve()), "popup", name or "", app],
+    subprocess.Popen([str(pyw), str(pathlib.Path(__file__).resolve()), "popup", name or "", app, mode],
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
-def popup(name, app, timeout_s=300):
+def popup(name, app, timeout_s=300, mode="start"):
     """Always-on-top reminder window in the bottom-right corner.
 
     Not a Windows toast: Do Not Disturb sends toasts straight to the notification center. The window
@@ -171,10 +186,14 @@ def popup(name, app, timeout_s=300):
     root.configure(bg=bg, highlightthickness=1, highlightbackground="#4a4a4a")
     body = tk.Frame(root, bg=bg, padx=px(18), pady=px(14))
     body.pack(fill="both", expand=True)
-    tk.Label(body, text=f"● Звонок в {app} начался", bg=bg, fg=fg, anchor="w",
-             font=("Segoe UI Semibold", 12)).pack(fill="x")
-    tk.Label(body, text=f"«{name}» — записать в Meetily?" if name else "Записать в Meetily?", bg=bg, fg=muted,
-             anchor="w", justify="left", wraplength=px(340), font=("Segoe UI", 10)).pack(fill="x", pady=(px(4), px(12)))
+    if mode == "stop":
+        title, text = f"■ Звонок в {app} закончился", "Meetily всё ещё записывает. Остановить запись?"
+    else:
+        title = f"● Звонок в {app} начался"
+        text = f"«{name}» — записать в Meetily?" if name else "Записать в Meetily?"
+    tk.Label(body, text=title, bg=bg, fg=fg, anchor="w", font=("Segoe UI Semibold", 12)).pack(fill="x")
+    tk.Label(body, text=text, bg=bg, fg=muted, anchor="w", justify="left", wraplength=px(340),
+             font=("Segoe UI", 10)).pack(fill="x", pady=(px(4), px(12)))
     row = tk.Frame(body, bg=bg)
     row.pack(fill="x")
 
@@ -182,10 +201,16 @@ def popup(name, app, timeout_s=300):
         root.destroy()
         start_from_link(f"{PROTOCOL}:{urllib.parse.quote(name or '')}")
 
+    def stop():
+        root.destroy()
+        stop_recording()
+
     style = dict(fg=fg, activeforeground=fg, relief="flat", borderwidth=0, cursor="hand2", padx=px(16), pady=px(6))
-    tk.Button(row, text="Записать", command=record, bg=accent, activebackground=accent_hover,
+    main_text, main_action, other_text = (("Остановить запись", stop, "Продолжить") if mode == "stop"
+                                          else ("Записать", record, "Не надо"))
+    tk.Button(row, text=main_text, command=main_action, bg=accent, activebackground=accent_hover,
               font=("Segoe UI Semibold", 10), **style).pack(side="left")
-    tk.Button(row, text="Не надо", command=root.destroy, bg=neutral, activebackground="#4a4a4a",
+    tk.Button(row, text=other_text, command=root.destroy, bg=neutral, activebackground="#4a4a4a",
               font=("Segoe UI", 10), **style).pack(side="left", padx=(px(8), 0))
 
     root.update_idletasks()
@@ -244,7 +269,9 @@ if __name__ == "__main__":
     elif cmd == "test":
         show(sys.argv[2] if len(sys.argv) > 2 else "Тестовая встреча")
     elif cmd == "popup":
-        popup(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "Zoom")
+        popup(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "Zoom", mode=sys.argv[4] if len(sys.argv) > 4 else "start")
+    elif cmd == "test-stop":
+        show(None, "Zoom", mode="stop")
     elif cmd == "call":
         print("call app using the mic:", active_call(), "| calendar event now:", current_event())
     elif cmd == "upcoming":

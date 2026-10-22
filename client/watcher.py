@@ -24,6 +24,7 @@ import requests
 import bitrix
 import btasks
 import folders
+import kb_export
 import notify
 import reminders
 import render
@@ -624,6 +625,10 @@ def notes_worker(state):
             share.refresh_all(log)   # share PDFs for new or edited notes
         except Exception:
             log.exception("notes thread failed")
+        try:
+            kb_export.refresh_all(log)   # meetings -> shared KB folder (no-op until kb_export_dir is set)
+        except Exception:
+            log.exception("KB export failed")
         if btasks.configured() and time.time() - last_pull > BTASKS_PULL_S:
             last_pull = time.time()
             try:
@@ -646,19 +651,22 @@ def notes_worker(state):
 def call_watcher():
     """Recording reminder when a call app (Zoom by default) starts using the microphone, including
     ad-hoc calls announced in Telegram that aren't in the calendar. One reminder per call; a call
-    ends after the mic has been free for a minute (short gaps while switching devices don't count)."""
-    since, last_seen = None, 0.0
+    ends after the mic has been free for a minute (short gaps while switching devices don't count),
+    and if Meetily is still recording then, a second reminder offers to stop it."""
+    since, last_seen, call_app = None, 0.0, None
     while True:
         try:
             app, now = reminders.active_call(), time.time()
             if app:
                 if since is None:
-                    since = now
+                    since, call_app = now, app
                     shown = reminders.on_call_start(app)
                     log.info("call started (%s)%s", app, f"; recording reminder shown: {shown}" if shown else "")
                 last_seen = now
             elif since is not None and now - last_seen > 60:
-                log.info("call ended after %d min", (last_seen - since) // 60)
+                stop_shown = reminders.on_call_end(call_app)
+                log.info("call ended after %d min%s", (last_seen - since) // 60,
+                         "; Meetily still recording, stop reminder shown" if stop_shown else "")
                 since = None
         except Exception:
             log.exception("call watcher failed")
