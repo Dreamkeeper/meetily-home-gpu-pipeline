@@ -24,6 +24,7 @@ import winreg
 
 import requests
 
+import audio_sessions
 import bitrix
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -105,9 +106,21 @@ def _running(exe):
 
 
 def active_call():
-    """Call app (exe name) currently using the microphone, or None. The process check guards against
-    a stale registry entry left by an app that crashed mid-call."""
-    using = apps_using_mic()
+    """Call app (exe name) currently using the microphone, or None.
+
+    Primary signal: an active capture session in Windows' audio stack (audio_sessions). Since 2026-10-23
+    Windows no longer updates the registry bookkeeping (ConsentStore, now PersistedInDatabase=1), which
+    is kept only as a fallback. The process check guards against a stale registry entry left by an app
+    that crashed mid-call."""
+    using = set()
+    try:
+        using |= audio_sessions.capturing_apps()
+    except OSError:
+        pass
+    try:
+        using |= apps_using_mic()
+    except OSError:
+        pass
     for app in CALL_APPS:
         if app in using and _running(app):
             return app
