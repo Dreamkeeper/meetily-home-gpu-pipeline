@@ -1,7 +1,7 @@
 """Which processes are capturing from a microphone right now, from Windows' Core Audio session API.
 
 Used for call detection. Windows' privacy bookkeeping in the registry (ConsentStore LastUsedTimeStop) stopped
-being updated on DKFramework on 2026-10-23 (entries now say PersistedInDatabase=1), so the audio sessions
+being updated on Windows 11 build 26300 (seen 2026-10-23; entries now say PersistedInDatabase=1), so the audio sessions
 themselves are the reliable signal: an app in a call holds an *active* capture session on some input device.
 Plain ctypes COM, no extra packages.
 
