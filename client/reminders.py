@@ -69,7 +69,16 @@ def skipped(name):
 
 
 def meetily_recording():
-    """True while Meetily writes a recording (its newest folder's metadata says "recording")."""
+    """True while Meetily records: it holds an active microphone capture session.
+
+    A folder whose metadata still says "recording" is not enough: an aborted start leaves such a folder
+    behind with no audio (2026-10-23 11:08:34), which made the reminders think Meetily was recording.
+    Without audio-session data, fall back to "recording" metadata plus checkpoint files written in the
+    last two minutes (Meetily writes one every 30 s)."""
+    try:
+        return "meetily.exe" in audio_sessions.capturing_apps()
+    except OSError:
+        pass
     root = pathlib.Path(CONFIG["recordings_dir"])
     folders = sorted((d for d in root.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)
     for d in folders[:2]:
@@ -77,7 +86,11 @@ def meetily_recording():
             meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if meta.get("status") == "recording" and time.time() - d.stat().st_mtime < 6 * 3600:
+        if meta.get("status") != "recording":
+            continue
+        written = [f.stat().st_mtime for sub in (".checkpoints", ".checkpoints_stereo") if (d / sub).is_dir()
+                   for f in (d / sub).iterdir()]
+        if written and time.time() - max(written) < 120:
             return True
     return False
 
