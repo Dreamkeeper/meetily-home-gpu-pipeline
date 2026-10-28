@@ -16,6 +16,7 @@ A failed item stays in the inbox and is retried. Voice notes are not rolled up i
   python voice.py <audio file> [sender]   # process one file by hand (result also sent to Telegram)
 """
 import datetime as dt
+import html
 import json
 import pathlib
 import re
@@ -80,8 +81,10 @@ def _attachment(msg):
     return None, None
 
 
-def _reply(chat, msg_id, text):
+def _reply(chat, msg_id, text, parse_mode=None):
     params = dict(chat_id=chat, text=text[:notify.MAX_LEN], disable_web_page_preview=True)
+    if parse_mode:
+        params["parse_mode"] = parse_mode
     if msg_id:
         params["reply_parameters"] = {"message_id": msg_id, "allow_sending_without_reply": True}
     return notify._api("sendMessage", **params)
@@ -179,22 +182,55 @@ def _section(md, title):
     return m.group(1).strip() if m else ""
 
 
+def _html(md_text):
+    """Escape for Telegram HTML and keep the note's **bold** (speaker labels)."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(md_text, quote=False))
+
+
+def _chunks(text, size=3300):
+    """Split the transcript at paragraph boundaries into pieces that fit one message after HTML escaping."""
+    out, cur = [], ""
+    for para in text.split("\n\n"):
+        while len(para) > size:            # a single huge paragraph: cut at a sentence end if possible
+            cut = para.rfind(". ", 0, size) + 1 or size
+            out.append((cur + "\n\n" + para[:cut]).strip() if cur else para[:cut].strip())
+            cur, para = "", para[cut:].strip()
+        if cur and len(cur) + len(para) + 2 > size:
+            out.append(cur)
+            cur = para
+        else:
+            cur = f"{cur}\n\n{para}" if cur else para
+    if cur:
+        out.append(cur)
+    return out
+
+
 def _send_result(meta, note, duration):
-    """Reply (or, for files dropped into the inbox, a plain message) with summary + cleaned text."""
+    """Reply in Telegram (HTML): bold title and meta line, «Кратко» as bullets, then the transcript in a
+    collapsible quote, so the summary and the text are clearly apart; long transcripts continue in more
+    messages. Files dropped into the inbox get a plain message instead of a reply."""
     if not notify.configured():
         return
     md = note.read_text(encoding="utf-8")
     title = (re.search(r"^# (.+)$", md, re.M) or [None, note.stem])[1]
-    brief = _section(md, "Кратко")
+    bullets = [l.lstrip("-* ").strip() for l in _section(md, "Кратко").splitlines() if l.strip().startswith(("-", "*"))]
     text = _section(md, "Текст") or _section(md, "Расшифровка (сырая)")
-    head = f"🎙 {meta['sender']}, {dt.datetime.fromisoformat(meta['sent_at']):%d.%m %H:%M}, {_fmt_dur(duration)}\n{title}"
-    body = "\n\n".join(x for x in (head, brief, text) if x)
+    text = re.sub(r"^!\[\[.*?\]\]\s*$", "", text, flags=re.M).strip()
+    when = dt.datetime.fromisoformat(meta["sent_at"])
+    head = (f"🎙 <b>{_html(title)}</b>\n"
+            f"<i>{html.escape(meta['sender'])} · {when:%d.%m %H:%M} · {_fmt_dur(duration)}</i>")
+    summary = ("<b>📝 Кратко</b>\n" + "\n".join(f"• {_html(b)}" for b in bullets)) if bullets else ""
+    parts = _chunks(text) if text else []
+    n = len(parts)
+    blocks = [f"<b>📄 Расшифровка{f' ({i}/{n})' if n > 1 else ''}</b>\n<blockquote expandable>{_html(t)}</blockquote>"
+              for i, t in enumerate(parts, 1)]
+    first = "\n\n".join(x for x in (head, summary) if x)
+    if blocks and len(first) + len(blocks[0]) + 2 <= notify.MAX_LEN:
+        first = f"{first}\n\n{blocks.pop(0)}"
+    messages = [first] + blocks
     chat = meta.get("chat_id") or _owner_chat()
-    first, reply_to = True, meta.get("reply_to")
-    while body:
-        part, body = body[:notify.MAX_LEN], body[notify.MAX_LEN:]
-        _reply(chat, reply_to if first else None, part)
-        first = False
+    for i, m in enumerate(messages):
+        _reply(chat, meta.get("reply_to") if i == 0 else None, m, parse_mode="HTML")
 
 
 def _unique(base):
