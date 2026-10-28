@@ -55,14 +55,23 @@ def _fmt_dur(seconds):
 
 
 # ---------------------------------------------------------------- Telegram -> inbox
+def _known_name(*keys):
+    """Bots see the sender's own profile name, not the owner's contact name for them, so map it via
+    `telegram_names` in config.json: Telegram user id, "@username" or profile name -> canonical name."""
+    names = CONFIG.get("telegram_names") or {}
+    return next((names[k] for k in keys if k and k in names), None)
+
+
 def _sender_and_time(msg):
     origin = msg.get("forward_origin") or {}
     kind = origin.get("type")
     if kind == "user":
         u = origin.get("sender_user", {})
         name = " ".join(x for x in (u.get("first_name"), u.get("last_name")) if x) or u.get("username") or "Telegram"
+        name = _known_name(str(u.get("id")), u.get("username") and "@" + u["username"], name) or name
     elif kind == "hidden_user":
         name = origin.get("sender_user_name") or "Telegram"
+        name = _known_name(name) or name
     elif kind in ("chat", "channel"):
         chat = origin.get("sender_chat") or origin.get("chat") or {}
         name = chat.get("title") or origin.get("author_signature") or "Telegram"
@@ -135,7 +144,9 @@ def poll_telegram(log, timeout=25):
             "duration": att.get("duration")}, ensure_ascii=False), encoding="utf-8")
         dst.with_suffix(dst.suffix + ".part").replace(dst)
         _reply(chat, msg["message_id"], f"⏳ Расшифровываю ({_fmt_dur(att.get('duration'))})…")
-        log.info("voice: queued Telegram message %s from %s", msg["message_id"], sender)
+        u = (msg.get("forward_origin") or {}).get("sender_user") or {}
+        log.info("voice: queued Telegram message %s from %s (tg id %s, @%s)", msg["message_id"], sender,
+                 u.get("id"), u.get("username"))
     STATE.parent.mkdir(exist_ok=True)
     STATE.write_text(json.dumps(state), encoding="utf-8")
 

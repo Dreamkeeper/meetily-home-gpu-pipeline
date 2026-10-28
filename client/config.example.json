@@ -35,5 +35,12 @@
   "partner_summary_min_english_note": "Meetings (not dailies) with at least this share of English speech get summary-en.txt (partner_summary_prompt.md, plain-text WeChat message) sent to Telegram for copying.",
   "partner_summary_model": "sonnet",
   "share_dir": "C:\\Users\\YOU\\Documents\\Meeting shares",
-  "share_dir_note": "One PDF per meeting (notes + Chinese-chatter summary + cleaned transcript), named after the meeting folder (share.py)."
+  "share_dir_note": "One PDF per meeting (notes + Chinese-chatter summary + cleaned transcript), named after the meeting folder (share.py).",
+  "voice_model": "sonnet",
+  "telegram_names": {
+    "123456789": "Jane Doe",
+    "@janedoe": "Jane Doe",
+    "Profile Nickname": "Jane Doe"
+  },
+  "telegram_names_note": "Forwarded voice messages: bots see the sender's own profile name, not your contact name, so map Telegram user id, @username or profile name to the name used in notes (voice.py; the watcher log prints id and username of each sender)."
 }
