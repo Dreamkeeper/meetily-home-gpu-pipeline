@@ -29,6 +29,7 @@ import notify
 import reminders
 import render
 import share
+import voice
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONFIG = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
@@ -648,6 +649,21 @@ def notes_worker(state):
         time.sleep(15)
 
 
+def voice_worker():
+    """Voice messages forwarded to the notifications bot and audio files dropped into the voice inbox:
+    transcript note in «Голосовые» + Telegram reply (voice.py). Own thread, so meetings are never blocked."""
+    while True:
+        try:
+            voice.poll_telegram(log)   # long poll, returns after <= 25 s
+        except Exception:
+            log.exception("voice: Telegram poll failed")
+            time.sleep(30)
+        try:
+            voice.process_inbox(_run_claude, log)
+        except Exception:
+            log.exception("voice: inbox processing failed")
+
+
 def call_watcher():
     """Recording reminder when a call app (Zoom by default) starts using the microphone, including
     ad-hoc calls announced in Telegram that aren't in the calendar. One reminder per call; a call
@@ -715,6 +731,8 @@ def main():
         return
     threading.Thread(target=tunnel_keeper, name="tunnel-keeper", daemon=True).start()
     threading.Thread(target=call_watcher, name="call-watcher", daemon=True).start()
+    if notify.configured() and not args.once:
+        threading.Thread(target=voice_worker, name="voice", daemon=True).start()
     if not args.once:
         threading.Thread(target=notes_worker, args=(state,), name="notes", daemon=True).start()
     while True:
